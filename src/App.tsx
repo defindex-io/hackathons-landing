@@ -400,10 +400,10 @@ function Siblings() {
     <footer className="siblings">
       <h2>Also at this hackathon</h2>
       <div className="sibling-grid">
-        <a className="sibling sibling-paltalabs" href="https://hackathons.paltalabs.io">
+        <a className="sibling sibling-paltalabs" href="https://links.paltalabs.io/hackathons">
           <img src="/brand/paltalabs-logo-white.svg" alt="PaltaLabs" width={170} height={35} />
           <span>The team behind DeFindex and Soroswap. Everything PaltaLabs brings to the hackathon.</span>
-          <span className="sibling-url">hackathons.paltalabs.io</span>
+          <span className="sibling-url">links.paltalabs.io/hackathons</span>
         </a>
         <a className="sibling sibling-soroswap" href="https://hackathons.soroswap.finance">
           <img src="/brand/soroswap-horizontal-purple.svg" alt="Soroswap" width={150} height={40} />

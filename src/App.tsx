@@ -13,6 +13,7 @@ import {
   SWAGGER_URL,
   TOKENS,
   VERIFIED_ON,
+  XLM_DEMO_VAULT,
 } from './data';
 
 const USAGE_SNIPPET = `import { DefindexSDK, SupportedNetworks } from "@defindex/sdk";
@@ -44,7 +45,69 @@ const { xdr } = await sdk.rebalanceVault(vault, {
   ],
 });`;
 
-const CURL_SNIPPET = `curl "${API_HOST}/vault/C_YOUR_VAULT?network=testnet" \\
+const IMPORT_SNIPPET = `# Download the vault's WASM from testnet (any DeFindex vault works, they share one WASM)
+stellar contract fetch --id ${XLM_DEMO_VAULT} \\
+  --network testnet -o defindex_vault.wasm
+
+# src/lib.rs: generates a typed defindex_vault::Client from the WASM
+mod defindex_vault {
+    soroban_sdk::contractimport!(file = "defindex_vault.wasm");
+}`;
+
+// Ran from a deployed contract against XLM_DEMO_VAULT on 2026-10-25.
+// Signatures: stellar-contracts vault/src/interface.rs (deposit, withdraw).
+const CONTRACT_DEPOSIT_SNIPPET = `use soroban_sdk::{
+    auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
+    vec, Address, Env, IntoVal, Symbol,
+};
+
+// Deposit \`amount\` of a token this contract holds into a single-asset vault.
+// Returns the vault shares minted to this contract.
+pub fn deposit_to_vault(e: &Env, vault: &Address, asset: &Address, amount: i128) -> i128 {
+    let me = e.current_contract_address();
+
+    // The vault pulls the deposit with token.transfer(me, vault, amount).
+    // That call is one level below us, so we pre-authorize exactly it.
+    e.authorize_as_current_contract(vec![
+        e,
+        InvokerContractAuthEntry::Contract(SubContractInvocation {
+            context: ContractContext {
+                contract: asset.clone(),
+                fn_name: Symbol::new(e, "transfer"),
+                args: (me.clone(), vault.clone(), amount).into_val(e),
+            },
+            sub_invocations: vec![e],
+        }),
+    ]);
+
+    let client = defindex_vault::Client::new(e, vault);
+    let (_amounts, shares, _allocations) = client.deposit(
+        &vec![e, amount], // amounts_desired, one entry per vault asset
+        &vec![e, amount], // amounts_min
+        &me,              // from: this contract pays and receives the shares
+        &true,            // invest now, following the vault's strategy split
+    );
+    shares
+}`;
+
+const CONTRACT_WITHDRAW_SNIPPET = `// Burn shares and get the asset back. No pre-auth here: the vault calls
+// from.require_auth() itself, and this contract is its direct caller.
+pub fn withdraw_from_vault(e: &Env, vault: &Address, shares: i128, min_out: i128) -> i128 {
+    let client = defindex_vault::Client::new(e, vault);
+    let me = e.current_contract_address();
+    let amounts = client.withdraw(&shares, &vec![e, min_out], &me);
+    amounts.get(0).unwrap()
+}
+
+// Read-only: the position in shares, and what those shares are worth now.
+pub fn position(e: &Env, vault: &Address) -> (i128, i128) {
+    let client = defindex_vault::Client::new(e, vault);
+    let shares = client.balance(&e.current_contract_address());
+    let underlying = client.get_asset_amounts_per_shares(&shares).get(0).unwrap_or(0);
+    (shares, underlying)
+}`;
+
+const CURL_SNIPPET =`curl "${API_HOST}/vault/C_YOUR_VAULT?network=testnet" \\
   -H "Authorization: Bearer $DEFINDEX_API_KEY"`;
 
 interface Idea {
@@ -131,6 +194,10 @@ const PROBLEMS: Problem[] = [
     fix: 'Vaults created through the API or SDK are not linked to your console account. Use the address from predictedVaultAddress.',
   },
   {
+    symptom: 'Error(Auth, InvalidAction) when my contract deposits',
+    fix: 'The vault pulls the tokens from your contract one call deeper. Call authorize_as_current_contract for that exact transfer first, with the same amount.',
+  },
+  {
     symptom: '429 Too Many Requests',
     fix: 'New API keys start on the free tier: about 1 request per second, bursts of 5. Cache reads like APY and balances.',
   },
@@ -146,6 +213,7 @@ function Nav() {
         <a href="#start">Quickstart</a>
         <a href="#strategies">Strategies</a>
         <a href="#build">Build a vault</a>
+        <a href="#contracts">From a contract</a>
         <a href="#ideas">Ideas</a>
         <a href={DOCS_URL} className="nav-docs">
           Docs
@@ -356,6 +424,60 @@ function UseSection() {
   );
 }
 
+function ContractSection() {
+  return (
+    <section className="section" id="contracts">
+      <div className="section-head">
+        <h2>Call a vault from your contract</h2>
+        <p>
+          Cross-contract calls let your Soroban contract deposit and withdraw by itself, with
+          nobody signing off-chain: a savings circle that holds the pot, a game treasury, a DAO
+          parking idle funds. The vault treats your contract like any other depositor and mints
+          the shares to it.
+        </p>
+      </div>
+      <ol className="steps">
+        <li>
+          <h3>Import the vault interface</h3>
+          <p>
+            Fetch the WASM once and let <code>contractimport!</code> generate the client and
+            types. The path is relative to your <code>Cargo.toml</code>.
+          </p>
+          <CodeBlock code={IMPORT_SNIPPET} caption="stellar CLI + Rust" />
+        </li>
+        <li>
+          <h3>Deposit what your contract holds</h3>
+          <p>
+            <code>deposit</code> calls <code>from.require_auth()</code>, which passes because
+            your contract is the caller. Then the vault calls the token’s{' '}
+            <code>transfer</code> on your contract’s funds. That is one level deeper, so your
+            contract has to authorize it in advance.
+          </p>
+          <CodeBlock code={CONTRACT_DEPOSIT_SNIPPET} caption="deposit" />
+        </li>
+        <li>
+          <h3>Read the position and withdraw</h3>
+          <p>
+            Vault shares are a token: <code>balance</code> gives your contract’s shares. Note
+            that <code>withdraw</code> takes shares, not an asset amount.
+          </p>
+          <CodeBlock code={CONTRACT_WITHDRAW_SNIPPET} caption="withdraw, balance" />
+        </li>
+      </ol>
+      <aside className="callout">
+        <strong>Test against a live vault.</strong> The XLM vault{' '}
+        <Address address={XLM_DEMO_VAULT} /> runs on testnet: send XLM to your contract and
+        deposit into it. The pre-auth above fits single-asset vaults, where the vault pulls
+        exactly <code>amounts_desired</code>. Multi-asset vaults can adjust the amounts to the
+        vault’s ratio, so the transfer would not match. When a user should own the shares
+        instead, pass the user as <code>from</code>, skip the pre-auth, and have the user sign:
+        simulation builds the whole authorization tree. <code>env.mock_all_auths()</code> in
+        tests hides a missing pre-auth, so run it once on testnet.
+      </aside>
+    </section>
+  );
+}
+
 function Ideas() {
   return (
     <section className="section section-green" id="ideas">
@@ -429,6 +551,7 @@ export default function App() {
         <Strategies />
         <BuildSection />
         <UseSection />
+        <ContractSection />
         <Ideas />
         <Troubleshooting />
       </main>

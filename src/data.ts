@@ -14,6 +14,10 @@ export const SOROBAN_TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 
 export const FACTORY = 'CDSCWE4GLNBYYTES2OCYDFQA2LLY4RBIAX6ZI32VSUXD7GO6HRPO4A32';
 
+// `xlm_paltalabs_vault` in testnet.contracts.json: a live single-asset XLM vault, so hackers
+// can test a cross-contract deposit before they create their own vault.
+export const XLM_DEMO_VAULT = 'CCLV4H7WTLJQ7ATLHBBQV2WW3OINF3FOY5XZ7VPHZO7NH3D2ZS4GFSF6';
+
 export type AssetSymbol = 'USDC' | 'XLM' | 'wETH' | 'wBTC';
 
 export interface Token {
